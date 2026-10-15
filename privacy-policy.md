@@ -7,7 +7,7 @@ title: Simple Thai Phrasebook – Privacy Policy
 **Simple Thai Phrasebook**
 Last updated: 15 October 2026
 
-This policy explains what information the Simple Thai Phrasebook app ("the app") collects, why, and what you can do about it. If you have any questions, contact me at **[YOUR CONTACT EMAIL]**.
+This policy explains what information the Simple Thai Phrasebook app ("the app") collects, why, and what you can do about it. If you have any questions, contact me at **varnelo317@gmail.com**.
 
 ## The short version
 
@@ -86,4 +86,4 @@ If this policy changes, the updated version will be posted on this page with a n
 
 ## Contact
 
-**[YOUR CONTACT EMAIL]**
+**varnelo317@gmail.com**
