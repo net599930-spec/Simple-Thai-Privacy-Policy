@@ -480,6 +480,15 @@ CREATE TABLE IF NOT EXISTS "public"."tag_definitions" (
 ALTER TABLE "public"."tag_definitions" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."tag_groups" (
+    "group_id" "uuid" NOT NULL,
+    "unit_id" "uuid" NOT NULL
+);
+
+
+ALTER TABLE "public"."tag_groups" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."tag_sentences" (
     "tag_id" "uuid" NOT NULL,
     "sentence_id" "uuid" NOT NULL,
@@ -507,6 +516,7 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
     "primary_goal" "text",
     "description" "text",
     "published" boolean DEFAULT false NOT NULL,
+    "is_group" boolean DEFAULT false NOT NULL,
     CONSTRAINT "tags_primary_goal_check" CHECK (("primary_goal" = ANY (ARRAY['grammar'::"text", 'vocabulary'::"text"])))
 );
 
@@ -767,6 +777,11 @@ ALTER TABLE ONLY "public"."tag_definitions"
 
 
 
+ALTER TABLE ONLY "public"."tag_groups"
+    ADD CONSTRAINT "tag_groups_pkey" PRIMARY KEY ("group_id", "unit_id");
+
+
+
 ALTER TABLE ONLY "public"."tag_sentences"
     ADD CONSTRAINT "tag_sentences_pkey" PRIMARY KEY ("tag_id", "sentence_id");
 
@@ -911,6 +926,10 @@ CREATE INDEX "idx_word_rule_applications_word_id" ON "public"."word_rule_applica
 
 
 
+CREATE INDEX "tag_groups_unit_id_idx" ON "public"."tag_groups" USING "btree" ("unit_id");
+
+
+
 CREATE INDEX "word_components_component_definition_id_idx" ON "public"."word_components" USING "btree" ("component_definition_id");
 
 
@@ -1022,6 +1041,16 @@ ALTER TABLE ONLY "public"."tag_definitions"
 
 ALTER TABLE ONLY "public"."tag_definitions"
     ADD CONSTRAINT "tag_definitions_tag_id_fkey" FOREIGN KEY ("tag_id") REFERENCES "public"."tags"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."tag_groups"
+    ADD CONSTRAINT "tag_groups_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."tags"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."tag_groups"
+    ADD CONSTRAINT "tag_groups_unit_id_fkey" FOREIGN KEY ("unit_id") REFERENCES "public"."tags"("id") ON DELETE CASCADE;
 
 
 
@@ -1420,6 +1449,21 @@ ALTER TABLE "public"."story_sentences" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."tag_definitions" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."tag_groups" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "tag_groups admins delete" ON "public"."tag_groups" FOR DELETE TO "authenticated" USING ("public"."is_admin"());
+
+
+
+CREATE POLICY "tag_groups admins insert" ON "public"."tag_groups" FOR INSERT TO "authenticated" WITH CHECK ("public"."is_admin"());
+
+
+
+CREATE POLICY "tag_groups readable by everyone" ON "public"."tag_groups" FOR SELECT TO "authenticated", "anon" USING (true);
+
+
+
 ALTER TABLE "public"."tag_sentences" ENABLE ROW LEVEL SECURITY;
 
 
@@ -1804,6 +1848,12 @@ GRANT ALL ON TABLE "public"."story_sentences" TO "service_role";
 GRANT ALL ON TABLE "public"."tag_definitions" TO "anon";
 GRANT ALL ON TABLE "public"."tag_definitions" TO "authenticated";
 GRANT ALL ON TABLE "public"."tag_definitions" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."tag_groups" TO "anon";
+GRANT ALL ON TABLE "public"."tag_groups" TO "authenticated";
+GRANT ALL ON TABLE "public"."tag_groups" TO "service_role";
 
 
 
