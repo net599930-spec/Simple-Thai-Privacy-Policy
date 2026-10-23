@@ -80,6 +80,29 @@ $$;
 ALTER FUNCTION "public"."handle_user_email_update"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."has_premium"("p_user_id" "uuid" DEFAULT "auth"."uid"()) RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+  select
+    -- Only about yourself (admins may check anyone).
+    (p_user_id = auth.uid() or public.is_admin())
+    and (
+      coalesce((select is_admin from public.users where id = p_user_id), false)
+      or exists (
+        select 1 from public.user_entitlements e
+        where e.user_id = p_user_id
+          and e.entitlement = 'premium'
+          and e.is_active
+          and (e.is_lifetime or e.expires_at is null or e.expires_at > now())
+      )
+    );
+$$;
+
+
+ALTER FUNCTION "public"."has_premium"("p_user_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."increment_version"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -344,6 +367,17 @@ SET default_tablespace = '';
 SET default_table_access_method = "heap";
 
 
+CREATE TABLE IF NOT EXISTS "public"."app_config" (
+    "id" boolean DEFAULT true NOT NULL,
+    "premium_enabled" boolean DEFAULT false NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "app_config_id_check" CHECK ("id")
+);
+
+
+ALTER TABLE "public"."app_config" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."characters" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "name" "text" NOT NULL,
@@ -396,6 +430,31 @@ CREATE TABLE IF NOT EXISTS "public"."knowledge_levels" (
 
 
 ALTER TABLE "public"."knowledge_levels" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."premium_testers" (
+    "user_id" "uuid" NOT NULL,
+    "note" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."premium_testers" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."revenuecat_events" (
+    "id" "text" NOT NULL,
+    "user_id" "uuid",
+    "type" "text" NOT NULL,
+    "environment" "text",
+    "payload" "jsonb" NOT NULL,
+    "received_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "processed_at" timestamp with time zone,
+    "error" "text"
+);
+
+
+ALTER TABLE "public"."revenuecat_events" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."rules" (
@@ -517,6 +576,7 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
     "description" "text",
     "published" boolean DEFAULT false NOT NULL,
     "is_group" boolean DEFAULT false NOT NULL,
+    "is_premium" boolean DEFAULT false NOT NULL,
     CONSTRAINT "tags_primary_goal_check" CHECK (("primary_goal" = ANY (ARRAY['grammar'::"text", 'vocabulary'::"text"])))
 );
 
@@ -554,6 +614,27 @@ CREATE TABLE IF NOT EXISTS "public"."user_definition_knowledge" (
 
 
 ALTER TABLE "public"."user_definition_knowledge" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."user_entitlements" (
+    "user_id" "uuid" NOT NULL,
+    "entitlement" "text" DEFAULT 'premium'::"text" NOT NULL,
+    "is_active" boolean DEFAULT false NOT NULL,
+    "product_id" "text",
+    "store" "text",
+    "period_type" "text",
+    "is_lifetime" boolean DEFAULT false NOT NULL,
+    "purchased_at" timestamp with time zone,
+    "expires_at" timestamp with time zone,
+    "will_renew" boolean,
+    "billing_issue_at" timestamp with time zone,
+    "unsubscribed_at" timestamp with time zone,
+    "environment" "text",
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."user_entitlements" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."user_level_colors" (
@@ -717,6 +798,11 @@ CREATE TABLE IF NOT EXISTS "public"."words" (
 ALTER TABLE "public"."words" OWNER TO "postgres";
 
 
+ALTER TABLE ONLY "public"."app_config"
+    ADD CONSTRAINT "app_config_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."characters"
     ADD CONSTRAINT "characters_pkey" PRIMARY KEY ("id");
 
@@ -739,6 +825,16 @@ ALTER TABLE ONLY "public"."knowledge_levels"
 
 ALTER TABLE ONLY "public"."knowledge_levels"
     ADD CONSTRAINT "knowledge_levels_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."premium_testers"
+    ADD CONSTRAINT "premium_testers_pkey" PRIMARY KEY ("user_id");
+
+
+
+ALTER TABLE ONLY "public"."revenuecat_events"
+    ADD CONSTRAINT "revenuecat_events_pkey" PRIMARY KEY ("id");
 
 
 
@@ -809,6 +905,11 @@ ALTER TABLE ONLY "public"."tags"
 
 ALTER TABLE ONLY "public"."user_definition_knowledge"
     ADD CONSTRAINT "user_definition_knowledge_pkey" PRIMARY KEY ("user_id", "definition_id");
+
+
+
+ALTER TABLE ONLY "public"."user_entitlements"
+    ADD CONSTRAINT "user_entitlements_pkey" PRIMARY KEY ("user_id", "entitlement");
 
 
 
@@ -926,6 +1027,10 @@ CREATE INDEX "idx_word_rule_applications_word_id" ON "public"."word_rule_applica
 
 
 
+CREATE INDEX "revenuecat_events_user_idx" ON "public"."revenuecat_events" USING "btree" ("user_id", "received_at" DESC);
+
+
+
 CREATE INDEX "tag_groups_unit_id_idx" ON "public"."tag_groups" USING "btree" ("unit_id");
 
 
@@ -1009,6 +1114,11 @@ ALTER TABLE ONLY "public"."definitions"
 
 
 
+ALTER TABLE ONLY "public"."premium_testers"
+    ADD CONSTRAINT "premium_testers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."sentence_tokens"
     ADD CONSTRAINT "sentence_tokens_definition_id_fkey" FOREIGN KEY ("definition_id") REFERENCES "public"."definitions"("id");
 
@@ -1086,6 +1196,11 @@ ALTER TABLE ONLY "public"."user_definition_knowledge"
 
 ALTER TABLE ONLY "public"."user_definition_knowledge"
     ADD CONSTRAINT "user_definition_knowledge_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_entitlements"
+    ADD CONSTRAINT "user_entitlements_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
 
@@ -1197,11 +1312,7 @@ CREATE POLICY "Admins can view all rows" ON "public"."users" FOR SELECT USING ("
 
 
 
-CREATE POLICY "Users can update own row" ON "public"."users" FOR UPDATE USING (("auth"."uid"() = "id"));
-
-
-
-CREATE POLICY "Users can view own row" ON "public"."users" FOR SELECT USING (("auth"."uid"() = "id"));
+CREATE POLICY "admins read revenuecat events" ON "public"."revenuecat_events" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
 
 
 
@@ -1289,6 +1400,17 @@ CREATE POLICY "admins_full_access" ON "public"."user_story_progress" USING ("pub
 
 
 
+ALTER TABLE "public"."app_config" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "app_config admins update" ON "public"."app_config" FOR UPDATE TO "authenticated" USING ("public"."is_admin"()) WITH CHECK ("public"."is_admin"());
+
+
+
+CREATE POLICY "app_config readable by everyone" ON "public"."app_config" FOR SELECT TO "authenticated", "anon" USING (true);
+
+
+
 ALTER TABLE "public"."characters" ENABLE ROW LEVEL SECURITY;
 
 
@@ -1310,6 +1432,10 @@ CREATE POLICY "own completion - select" ON "public"."user_tag_completion" FOR SE
 
 
 CREATE POLICY "own completion - update" ON "public"."user_tag_completion" FOR UPDATE USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own entitlements readable" ON "public"."user_entitlements" FOR SELECT TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR "public"."is_admin"()));
 
 
 
@@ -1358,6 +1484,17 @@ CREATE POLICY "owner_full_access" ON "public"."user_sentence_knowledge" USING ((
 
 
 CREATE POLICY "owner_full_access" ON "public"."user_story_progress" USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+ALTER TABLE "public"."premium_testers" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "premium_testers admins write" ON "public"."premium_testers" TO "authenticated" USING ("public"."is_admin"()) WITH CHECK ("public"."is_admin"());
+
+
+
+CREATE POLICY "premium_testers own row" ON "public"."premium_testers" FOR SELECT TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR "public"."is_admin"()));
 
 
 
@@ -1431,6 +1568,9 @@ CREATE POLICY "public_can_read" ON "public"."words" FOR SELECT USING ((EXISTS ( 
 
 
 
+ALTER TABLE "public"."revenuecat_events" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."rules" ENABLE ROW LEVEL SECURITY;
 
 
@@ -1482,6 +1622,9 @@ CREATE POLICY "ulc_own" ON "public"."user_level_colors" USING (("auth"."uid"() =
 
 
 ALTER TABLE "public"."user_definition_knowledge" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."user_entitlements" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."user_level_colors" ENABLE ROW LEVEL SECURITY;
@@ -1703,6 +1846,12 @@ GRANT ALL ON FUNCTION "public"."handle_user_email_update"() TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."has_premium"("p_user_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_premium"("p_user_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."has_premium"("p_user_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."increment_version"() TO "anon";
 GRANT ALL ON FUNCTION "public"."increment_version"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."increment_version"() TO "service_role";
@@ -1791,6 +1940,12 @@ GRANT ALL ON FUNCTION "public"."touch_updated_at"() TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."app_config" TO "anon";
+GRANT ALL ON TABLE "public"."app_config" TO "authenticated";
+GRANT ALL ON TABLE "public"."app_config" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."characters" TO "anon";
 GRANT ALL ON TABLE "public"."characters" TO "authenticated";
 GRANT ALL ON TABLE "public"."characters" TO "service_role";
@@ -1812,6 +1967,18 @@ GRANT ALL ON TABLE "public"."definitions" TO "service_role";
 GRANT ALL ON TABLE "public"."knowledge_levels" TO "anon";
 GRANT ALL ON TABLE "public"."knowledge_levels" TO "authenticated";
 GRANT ALL ON TABLE "public"."knowledge_levels" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."premium_testers" TO "anon";
+GRANT ALL ON TABLE "public"."premium_testers" TO "authenticated";
+GRANT ALL ON TABLE "public"."premium_testers" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."revenuecat_events" TO "anon";
+GRANT ALL ON TABLE "public"."revenuecat_events" TO "authenticated";
+GRANT ALL ON TABLE "public"."revenuecat_events" TO "service_role";
 
 
 
@@ -1881,6 +2048,12 @@ GRANT ALL ON TABLE "public"."user_definition_knowledge" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."user_entitlements" TO "anon";
+GRANT ALL ON TABLE "public"."user_entitlements" TO "authenticated";
+GRANT ALL ON TABLE "public"."user_entitlements" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."user_level_colors" TO "anon";
 GRANT ALL ON TABLE "public"."user_level_colors" TO "authenticated";
 GRANT ALL ON TABLE "public"."user_level_colors" TO "service_role";
@@ -1923,9 +2096,17 @@ GRANT ALL ON TABLE "public"."user_word_spelling" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."users" TO "anon";
-GRANT ALL ON TABLE "public"."users" TO "authenticated";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."users" TO "anon";
+GRANT SELECT,INSERT,REFERENCES,DELETE,TRIGGER,TRUNCATE,MAINTAIN ON TABLE "public"."users" TO "authenticated";
 GRANT ALL ON TABLE "public"."users" TO "service_role";
+
+
+
+GRANT UPDATE("display_name") ON TABLE "public"."users" TO "authenticated";
+
+
+
+GRANT UPDATE("multi_sense_strategy") ON TABLE "public"."users" TO "authenticated";
 
 
 
