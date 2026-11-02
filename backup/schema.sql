@@ -45,6 +45,29 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA "extensions";
 
 
 
+CREATE OR REPLACE FUNCTION "public"."delete_tag"("p_tag_id" "uuid") RETURNS "void"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+begin
+  if not public.is_admin() then
+    raise exception 'Admins only';
+  end if;
+
+  delete from tag_definitions     where tag_id = p_tag_id;  -- links to word meanings
+  delete from tag_sentences       where tag_id = p_tag_id;  -- links to sentences
+  delete from tag_stories         where tag_id = p_tag_id;  -- links to stories
+  delete from tag_groups          where group_id = p_tag_id or unit_id = p_tag_id;
+  delete from user_tag_completion where tag_id = p_tag_id;  -- users' "done" marks
+  delete from user_unit_bookmarks where tag_id = p_tag_id;  -- users' unit bookmarks
+  delete from tags                where id = p_tag_id;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."delete_tag"("p_tag_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -376,6 +399,18 @@ CREATE TABLE IF NOT EXISTS "public"."app_config" (
 
 
 ALTER TABLE "public"."app_config" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."audio_voice_choices" (
+    "text_hash" "text" NOT NULL,
+    "thai" "text" NOT NULL,
+    "female_voice" "text",
+    "male_voice" "text",
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."audio_voice_choices" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."characters" (
@@ -800,6 +835,11 @@ ALTER TABLE "public"."words" OWNER TO "postgres";
 
 ALTER TABLE ONLY "public"."app_config"
     ADD CONSTRAINT "app_config_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."audio_voice_choices"
+    ADD CONSTRAINT "audio_voice_choices_pkey" PRIMARY KEY ("text_hash");
 
 
 
@@ -1312,6 +1352,10 @@ CREATE POLICY "Admins can view all rows" ON "public"."users" FOR SELECT USING ("
 
 
 
+CREATE POLICY "admins change voice choices" ON "public"."audio_voice_choices" TO "authenticated" USING ("public"."is_admin"()) WITH CHECK ("public"."is_admin"());
+
+
+
 CREATE POLICY "admins read revenuecat events" ON "public"."revenuecat_events" FOR SELECT TO "authenticated" USING ("public"."is_admin"());
 
 
@@ -1411,6 +1455,9 @@ CREATE POLICY "app_config readable by everyone" ON "public"."app_config" FOR SEL
 
 
 
+ALTER TABLE "public"."audio_voice_choices" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."characters" ENABLE ROW LEVEL SECURITY;
 
 
@@ -1418,6 +1465,10 @@ ALTER TABLE "public"."definition_relations" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."definitions" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "everyone can read voice choices" ON "public"."audio_voice_choices" FOR SELECT TO "authenticated", "anon" USING (true);
+
 
 
 ALTER TABLE "public"."knowledge_levels" ENABLE ROW LEVEL SECURITY;
@@ -1834,6 +1885,13 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 
 
+REVOKE ALL ON FUNCTION "public"."delete_tag"("p_tag_id" "uuid") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."delete_tag"("p_tag_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."delete_tag"("p_tag_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."delete_tag"("p_tag_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "anon";
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "service_role";
@@ -1943,6 +2001,12 @@ GRANT ALL ON FUNCTION "public"."touch_updated_at"() TO "service_role";
 GRANT ALL ON TABLE "public"."app_config" TO "anon";
 GRANT ALL ON TABLE "public"."app_config" TO "authenticated";
 GRANT ALL ON TABLE "public"."app_config" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."audio_voice_choices" TO "anon";
+GRANT ALL ON TABLE "public"."audio_voice_choices" TO "authenticated";
+GRANT ALL ON TABLE "public"."audio_voice_choices" TO "service_role";
 
 
 
