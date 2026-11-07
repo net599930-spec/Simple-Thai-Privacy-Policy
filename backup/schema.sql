@@ -1490,6 +1490,10 @@ CREATE POLICY "own entitlements readable" ON "public"."user_entitlements" FOR SE
 
 
 
+CREATE POLICY "own sentence spelling - delete" ON "public"."user_sentence_spelling" FOR DELETE USING (("auth"."uid"() = "user_id"));
+
+
+
 CREATE POLICY "own sentence spelling - insert" ON "public"."user_sentence_spelling" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
 
 
@@ -1507,6 +1511,10 @@ CREATE POLICY "own tag completion rows only" ON "public"."user_tag_completion" U
 
 
 CREATE POLICY "own unit bookmark rows only" ON "public"."user_unit_bookmarks" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "own word spelling - delete" ON "public"."user_word_spelling" FOR DELETE USING (("auth"."uid"() = "user_id"));
 
 
 
