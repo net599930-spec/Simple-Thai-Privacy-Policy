@@ -253,6 +253,27 @@ $$;
 ALTER FUNCTION "public"."publish_unit"("p_tag_id" "uuid") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."record_item_practice"("p_items" "jsonb") RETURNS "void"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+begin
+  if auth.uid() is null then
+    raise exception 'not signed in';
+  end if;
+
+  insert into user_item_practice (user_id, item_key, practiced_at)
+  select auth.uid(), e.key, e.value::timestamptz
+    from jsonb_each_text(p_items) as e
+  on conflict (user_id, item_key) do update set
+    practiced_at = greatest(user_item_practice.practiced_at, excluded.practiced_at);
+end;
+$$;
+
+
+ALTER FUNCTION "public"."record_item_practice"("p_items" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."record_spelling_time"("p_item_type" "text", "p_item_id" "uuid", "p_mode" "text", "p_time_ms" integer) RETURNS integer
     LANGUAGE "plpgsql"
     SET "search_path" TO 'public'
@@ -635,6 +656,28 @@ COMMENT ON COLUMN "public"."tags"."description" IS 'Rich-text/HTML explanation o
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."user_activity_days" (
+    "user_id" "uuid" NOT NULL,
+    "device_id" "uuid" NOT NULL,
+    "day" "date" NOT NULL,
+    "practiced" integer DEFAULT 0 NOT NULL,
+    "counts" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "ring_goals" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "legacy_goal" integer,
+    "words_up" integer DEFAULT 0 NOT NULL,
+    "words_down" integer DEFAULT 0 NOT NULL,
+    "sentences_up" integer DEFAULT 0 NOT NULL,
+    "sentences_down" integer DEFAULT 0 NOT NULL,
+    "words_reached" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "sentences_reached" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "user_activity_days_practiced_check" CHECK (("practiced" >= 0))
+);
+
+
+ALTER TABLE "public"."user_activity_days" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."user_definition_knowledge" (
     "user_id" "uuid" NOT NULL,
     "definition_id" "uuid" NOT NULL,
@@ -670,6 +713,29 @@ CREATE TABLE IF NOT EXISTS "public"."user_entitlements" (
 
 
 ALTER TABLE "public"."user_entitlements" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."user_goal_settings" (
+    "user_id" "uuid" NOT NULL,
+    "ring_goals" "jsonb" DEFAULT '{}'::"jsonb" NOT NULL,
+    "rings_on" "text"[] DEFAULT ARRAY['r'::"text", 's'::"text", 'k'::"text"] NOT NULL,
+    "hints_count" boolean DEFAULT false NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."user_goal_settings" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."user_item_practice" (
+    "user_id" "uuid" NOT NULL,
+    "item_key" "text" NOT NULL,
+    "practiced_at" timestamp with time zone NOT NULL,
+    CONSTRAINT "user_item_practice_item_key_check" CHECK (("item_key" ~ '^[ws]:'::"text"))
+);
+
+
+ALTER TABLE "public"."user_item_practice" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."user_level_colors" (
@@ -943,6 +1009,11 @@ ALTER TABLE ONLY "public"."tags"
 
 
 
+ALTER TABLE ONLY "public"."user_activity_days"
+    ADD CONSTRAINT "user_activity_days_pkey" PRIMARY KEY ("user_id", "device_id", "day");
+
+
+
 ALTER TABLE ONLY "public"."user_definition_knowledge"
     ADD CONSTRAINT "user_definition_knowledge_pkey" PRIMARY KEY ("user_id", "definition_id");
 
@@ -950,6 +1021,16 @@ ALTER TABLE ONLY "public"."user_definition_knowledge"
 
 ALTER TABLE ONLY "public"."user_entitlements"
     ADD CONSTRAINT "user_entitlements_pkey" PRIMARY KEY ("user_id", "entitlement");
+
+
+
+ALTER TABLE ONLY "public"."user_goal_settings"
+    ADD CONSTRAINT "user_goal_settings_pkey" PRIMARY KEY ("user_id");
+
+
+
+ALTER TABLE ONLY "public"."user_item_practice"
+    ADD CONSTRAINT "user_item_practice_pkey" PRIMARY KEY ("user_id", "item_key");
 
 
 
@@ -1072,6 +1153,10 @@ CREATE INDEX "revenuecat_events_user_idx" ON "public"."revenuecat_events" USING 
 
 
 CREATE INDEX "tag_groups_unit_id_idx" ON "public"."tag_groups" USING "btree" ("unit_id");
+
+
+
+CREATE INDEX "user_activity_days_user_day_idx" ON "public"."user_activity_days" USING "btree" ("user_id", "day");
 
 
 
@@ -1229,6 +1314,11 @@ ALTER TABLE ONLY "public"."user_definition_knowledge"
 
 
 
+ALTER TABLE ONLY "public"."user_activity_days"
+    ADD CONSTRAINT "user_activity_days_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."user_definition_knowledge"
     ADD CONSTRAINT "user_definition_knowledge_definition_id_fkey" FOREIGN KEY ("definition_id") REFERENCES "public"."definitions"("id") ON DELETE CASCADE;
 
@@ -1241,6 +1331,16 @@ ALTER TABLE ONLY "public"."user_definition_knowledge"
 
 ALTER TABLE ONLY "public"."user_entitlements"
     ADD CONSTRAINT "user_entitlements_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_goal_settings"
+    ADD CONSTRAINT "user_goal_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_item_practice"
+    ADD CONSTRAINT "user_item_practice_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
 
@@ -1474,6 +1574,22 @@ CREATE POLICY "everyone can read voice choices" ON "public"."audio_voice_choices
 ALTER TABLE "public"."knowledge_levels" ENABLE ROW LEVEL SECURITY;
 
 
+CREATE POLICY "own activity days - delete" ON "public"."user_activity_days" FOR DELETE USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own activity days - insert" ON "public"."user_activity_days" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own activity days - select" ON "public"."user_activity_days" FOR SELECT USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own activity days - update" ON "public"."user_activity_days" FOR UPDATE USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
 CREATE POLICY "own completion - insert" ON "public"."user_tag_completion" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
 
 
@@ -1487,6 +1603,34 @@ CREATE POLICY "own completion - update" ON "public"."user_tag_completion" FOR UP
 
 
 CREATE POLICY "own entitlements readable" ON "public"."user_entitlements" FOR SELECT TO "authenticated" USING ((("user_id" = "auth"."uid"()) OR "public"."is_admin"()));
+
+
+
+CREATE POLICY "own goal settings - insert" ON "public"."user_goal_settings" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own goal settings - select" ON "public"."user_goal_settings" FOR SELECT USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own goal settings - update" ON "public"."user_goal_settings" FOR UPDATE USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own item practice - delete" ON "public"."user_item_practice" FOR DELETE USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own item practice - insert" ON "public"."user_item_practice" FOR INSERT WITH CHECK (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own item practice - select" ON "public"."user_item_practice" FOR SELECT USING (("auth"."uid"() = "user_id"));
+
+
+
+CREATE POLICY "own item practice - update" ON "public"."user_item_practice" FOR UPDATE USING (("auth"."uid"() = "user_id")) WITH CHECK (("auth"."uid"() = "user_id"));
 
 
 
@@ -1680,10 +1824,19 @@ CREATE POLICY "ulc_own" ON "public"."user_level_colors" USING (("auth"."uid"() =
 
 
 
+ALTER TABLE "public"."user_activity_days" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."user_definition_knowledge" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."user_entitlements" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."user_goal_settings" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."user_item_practice" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."user_level_colors" ENABLE ROW LEVEL SECURITY;
@@ -1954,6 +2107,13 @@ GRANT ALL ON FUNCTION "public"."publish_unit"("p_tag_id" "uuid") TO "service_rol
 
 
 
+REVOKE ALL ON FUNCTION "public"."record_item_practice"("p_items" "jsonb") FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."record_item_practice"("p_items" "jsonb") TO "anon";
+GRANT ALL ON FUNCTION "public"."record_item_practice"("p_items" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."record_item_practice"("p_items" "jsonb") TO "service_role";
+
+
+
 REVOKE ALL ON FUNCTION "public"."record_spelling_time"("p_item_type" "text", "p_item_id" "uuid", "p_mode" "text", "p_time_ms" integer) FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."record_spelling_time"("p_item_type" "text", "p_item_id" "uuid", "p_mode" "text", "p_time_ms" integer) TO "anon";
 GRANT ALL ON FUNCTION "public"."record_spelling_time"("p_item_type" "text", "p_item_id" "uuid", "p_mode" "text", "p_time_ms" integer) TO "authenticated";
@@ -2114,6 +2274,12 @@ GRANT ALL ON TABLE "public"."tags" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."user_activity_days" TO "anon";
+GRANT ALL ON TABLE "public"."user_activity_days" TO "authenticated";
+GRANT ALL ON TABLE "public"."user_activity_days" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."user_definition_knowledge" TO "anon";
 GRANT ALL ON TABLE "public"."user_definition_knowledge" TO "authenticated";
 GRANT ALL ON TABLE "public"."user_definition_knowledge" TO "service_role";
@@ -2123,6 +2289,18 @@ GRANT ALL ON TABLE "public"."user_definition_knowledge" TO "service_role";
 GRANT ALL ON TABLE "public"."user_entitlements" TO "anon";
 GRANT ALL ON TABLE "public"."user_entitlements" TO "authenticated";
 GRANT ALL ON TABLE "public"."user_entitlements" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."user_goal_settings" TO "anon";
+GRANT ALL ON TABLE "public"."user_goal_settings" TO "authenticated";
+GRANT ALL ON TABLE "public"."user_goal_settings" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."user_item_practice" TO "anon";
+GRANT ALL ON TABLE "public"."user_item_practice" TO "authenticated";
+GRANT ALL ON TABLE "public"."user_item_practice" TO "service_role";
 
 
 
