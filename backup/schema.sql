@@ -470,7 +470,8 @@ CREATE TABLE IF NOT EXISTS "public"."definitions" (
     "version" integer DEFAULT 1 NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "published" boolean DEFAULT false NOT NULL
+    "published" boolean DEFAULT false NOT NULL,
+    "position" integer
 );
 
 
